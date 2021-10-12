@@ -8,18 +8,18 @@ import {
   useRef,
 } from 'react'
 import {
-  createDeepProxy,
-  isDeepChanged,
   affectedToPathList,
+  createProxy as createProxyToCompare,
+  isChanged,
 } from 'proxy-compare'
-
-import { getVersion, subscribe, snapshot } from './vanilla'
 import { createMutableSource, useMutableSource } from './useMutableSource'
-import type { NonPromise } from './vanilla'
+import { getVersion, snapshot, subscribe } from './vanilla'
+import type { DeepResolveType } from './vanilla'
 
 const isSSR =
   typeof window === 'undefined' ||
-  /ServerSideRendering/.test(window.navigator && window.navigator.userAgent)
+  !window.navigator ||
+  /ServerSideRendering|^Deno\//.test(window.navigator.userAgent)
 
 const useIsomorphicLayoutEffect = isSSR ? useEffect : useLayoutEffect
 
@@ -34,9 +34,11 @@ const useAffectedDebugValue = <State>(
   useDebugValue(pathList.current)
 }
 
-type MutableSource = any
-const mutableSourceCache = new WeakMap<object, MutableSource>()
-const getMutableSource = (proxyObject: any): MutableSource => {
+const mutableSourceCache = new WeakMap<object, unknown>()
+const getMutableSource = <T extends object>(proxyObject: T) => {
+  // Note this is just for inferring type
+  const create = () => createMutableSource(proxyObject, getVersion)
+  type MutableSource = ReturnType<typeof create>
   if (!mutableSourceCache.has(proxyObject)) {
     mutableSourceCache.set(
       proxyObject,
@@ -125,12 +127,12 @@ type Options = {
 export const useSnapshot = <T extends object>(
   proxyObject: T,
   options?: Options
-): NonPromise<T> => {
-  const [, forceUpdate] = useReducer((c) => c + 1, 0)
+): DeepResolveType<T> => {
+  const forceUpdate = useReducer((c) => c + 1, 0)[1]
   const affected = new WeakMap()
   const lastAffected = useRef<typeof affected>()
-  const prevSnapshot = useRef<NonPromise<T>>()
-  const lastSnapshot = useRef<NonPromise<T>>()
+  const prevSnapshot = useRef<DeepResolveType<T>>()
+  const lastSnapshot = useRef<DeepResolveType<T>>()
   useIsomorphicLayoutEffect(() => {
     lastSnapshot.current = prevSnapshot.current = snapshot(proxyObject)
   }, [proxyObject])
@@ -138,7 +140,7 @@ export const useSnapshot = <T extends object>(
     lastAffected.current = affected
     if (
       prevSnapshot.current !== lastSnapshot.current &&
-      isDeepChanged(
+      isChanged(
         prevSnapshot.current,
         lastSnapshot.current,
         affected,
@@ -160,7 +162,7 @@ export const useSnapshot = <T extends object>(
           try {
             if (
               lastAffected.current &&
-              !isDeepChanged(
+              !isChanged(
                 prevSnapshot.current,
                 nextSnapshot,
                 lastAffected.current,
@@ -190,5 +192,5 @@ export const useSnapshot = <T extends object>(
     useAffectedDebugValue(currSnapshot, affected)
   }
   const proxyCache = useMemo(() => new WeakMap(), []) // per-hook proxyCache
-  return createDeepProxy(currSnapshot, affected, proxyCache)
+  return createProxyToCompare(currSnapshot, affected, proxyCache)
 }

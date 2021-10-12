@@ -35,6 +35,7 @@ setInterval(() => {
 Create a local snapshot that catches changes. Rule of thumb: read from snapshots, mutate the source. The component will only re-render when the parts of the state you access have changed, it is render-optimized.
 
 ```jsx
+// This will re-render on `state.count` change but not on `state.text` change
 function Counter() {
   const snap = useSnapshot(state)
   return (
@@ -45,6 +46,43 @@ function Counter() {
   )
 }
 ```
+
+<details>
+<summary>Note: useSnapshot returns a new proxy for render optimization.</summary>
+
+Internally, `useSnapshot` calls `snapshot` in valtio/vanilla,
+and wraps the snapshot object with another proxy to detect property access.
+This feature is based on [proxy-compare](https://github.com/dai-shi/proxy-compare).
+
+Two kinds of proxies are used for different purposes:
+
+- `proxy()` from `valtio/vanilla` is for mutation tracking or write tracking.
+- `createProxy()` from `proxy-compare` is for usage tracking or read tracking.
+</details>
+
+<details>
+<summary>Use of `this` is for expert users.</summary>
+
+Valtio tries best to handle `this` behavior
+but it's hard to understand without familiarity.
+
+```js
+const state = proxy({ count: 0, inc() { ++this.count } })
+state.inc() // `this` points to `state` and it works fine
+const snap = useSnapshot(state)
+snap.inc() // `this` points to `snap` and it doesn't work because snapshot is frozen
+```
+
+To avoid this pitfall, the recommended pattern is not to use `this` and prefer arrow function.
+
+```js
+const state = proxy({ count: 0, inc: () => { ++state.count } })
+```
+
+</details>
+
+If you are new to this, it's highly recommended to use
+[eslint-plugin-valtio](https://github.com/pmndrs/eslint-plugin-valtio).
 
 #### Subscribe from anywhere
 
@@ -71,13 +109,24 @@ subscribe(state.arr, () => console.log('state.arr has changed to', state.arr))
 state.arr.push('world')
 ```
 
-To subscribe to a primitive value of state, consider subscribeKey in utils.
+To subscribe to a primitive value of state, consider `subscribeKey` in utils.
 
 ```jsx
 import { subscribeKey } from 'valtio/utils'
 
 const state = proxy({ count: 0, text: 'hello' })
 subscribeKey(state, 'count', (v) => console.log('state.count has changed to', v))
+```
+
+There is another util `watch` which might be convenient in some cases.
+
+```jsx
+import { watch } from 'valtio/utils'
+
+const state = proxy({ count: 0 })
+const stop = watch((get) => {
+  console.log('state has changed to', get(state)) // auto-subscribe on use
+})
 ```
 
 #### Suspend your components
@@ -105,7 +154,7 @@ function App() {
 
 This may be useful if you have large, nested objects with accessors that you don't want to proxy. `ref` allows you to keep these objects inside the state model.
 
-See https://github.com/pmndrs/valtio/pull/62 for more information.
+See [#61](https://github.com/pmndrs/valtio/issues/61) and [#178](https://github.com/pmndrs/valtio/issues/178) for more information.
 
 ```js
 import { proxy, ref } from 'valtio'
@@ -197,47 +246,37 @@ const Component = () => {
 }
 ```
 
-#### Computed values
+#### `derive` util
 
-You can have computed values with dependency tracking.
-Dependency tracking in valtio conflicts with the work in useSnapshot.
-React users should consider using render functions (optionally useMemo)
-as a primary mean.
-Computed works well for some edge cases and for vanilla-js users.
-
-##### `addComputed`
-
-This is to add new computed to an existing proxy state.
-It can add computed to different proxy state.
+You can subscribe to some proxies and create a derived proxy.
 
 ```js
-import { addComputed } from 'valtio/utils'
+import { derive } from 'valtio/utils'
 
 // create a base proxy
 const state = proxy({
   count: 1,
 })
 
-// add computed to state
-addComputed(state, {
-  doubled: snap => snap.count * 2,
+// create a derived proxy
+const derived = derive({
+  doubled: (get) => get(state).count * 2,
 })
 
-// create another proxy
-const state2 = proxy({
-  text: 'hello',
+// alternatively, attach derived properties to an existing proxy
+derive({
+  tripled: (get) => get(state).count * 3,
+}, {
+  proxy: state,
 })
-
-// add computed from state to state2
-addComputed(state, {
-  doubled: snap => snap.count * 2,
-}, state2)
 ```
 
-##### `proxyWithComputed`
+#### `proxyWithComputed` util
 
-This is to create a proxy state with computed at the same time.
-It can define setters optionally.
+You can have computed values with dependency tracking with property access.
+Dependency tracking in `proxyWithComputed` conflicts with the work in `useSnapshot`.
+React users should prefer using `derive`.
+`proxyWithComputed` works well for some edge cases and for vanilla-js users.
 
 ```js
 import { proxyWithComputed } from 'valtio/utils'
@@ -267,3 +306,37 @@ const state = proxyWithComputed({
   quadrupled: snap => snap.doubled * 2
 })
 ```
+
+The last use case fails to infer types in TypeScript
+[#192](https://github.com/pmndrs/valtio/issues/192).
+
+#### `proxyWithHistory` util
+
+This is a utility function to create a proxy with snapshot history.
+
+```js
+import { proxyWithHistory } from 'valtio/utils'
+
+const state = proxyWithHistory({ count: 0 })
+console.log(state.value) // ---> { count: 0 }
+state.value.count += 1
+console.log(state.value) // ---> { count: 1 }
+state.undo()
+console.log(state.value) // ---> { count: 0 }
+state.redo()
+console.log(state.value) // ---> { count: 1 }
+```
+
+#### Plugins
+
+- [eslint-plugin-valtio](https://github.com/pmndrs/eslint-plugin-valtio)
+
+#### Recipes
+
+Valtio is unopinionated about best practices.
+The community is working on recipes on wiki pages.
+
+- [How to organize actions](https://github.com/pmndrs/valtio/wiki/How-to-organize-actions)
+- [How to persist states](https://github.com/pmndrs/valtio/wiki/How-to-persist-states)
+- [How to use with context](https://github.com/pmndrs/valtio/wiki/How-to-use-with-context)
+- [How to split and compose states](https://github.com/pmndrs/valtio/wiki/How-to-split-and-compose-states)

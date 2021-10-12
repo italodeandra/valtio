@@ -1,11 +1,27 @@
-import React, { StrictMode } from 'react'
+import { StrictMode } from 'react'
 import { fireEvent, render } from '@testing-library/react'
-import { proxy, useSnapshot } from '../src/index'
+import { proxy, useSnapshot } from 'valtio'
+
+const consoleError = console.error
+beforeEach(() => {
+  console.error = jest.fn((message) => {
+    if (
+      process.env.NODE_ENV === 'production' &&
+      message.startsWith('act(...) is not supported in production')
+    ) {
+      return
+    }
+    consoleError(message)
+  })
+})
+afterEach(() => {
+  console.error = consoleError
+})
 
 it('unsupported map', async () => {
   const obj = proxy({ map: new Map([['count', 0]]) })
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj) as any
     return (
       <>
@@ -31,7 +47,7 @@ it('unsupported map', async () => {
 it('unsupported set', async () => {
   const obj = proxy({ set: new Set([1, 2, 3]) })
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj) as any
     return (
       <>

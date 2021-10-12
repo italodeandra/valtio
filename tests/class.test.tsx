@@ -1,6 +1,22 @@
-import React, { StrictMode, useRef, useEffect } from 'react'
+import { StrictMode, useEffect, useRef } from 'react'
 import { fireEvent, render, waitFor } from '@testing-library/react'
-import { proxy, useSnapshot } from '../src/index'
+import { proxy, useSnapshot } from 'valtio'
+
+const consoleError = console.error
+beforeEach(() => {
+  console.error = jest.fn((message) => {
+    if (
+      process.env.NODE_ENV === 'production' &&
+      message.startsWith('act(...) is not supported in production')
+    ) {
+      return
+    }
+    consoleError(message)
+  })
+})
+afterEach(() => {
+  console.error = consoleError
+})
 
 it('simple class without methods', async () => {
   class CountClass {
@@ -12,7 +28,7 @@ it('simple class without methods', async () => {
 
   const obj = proxy(new CountClass())
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj)
     return (
       <>
@@ -46,7 +62,7 @@ it('no extra re-renders with class', async () => {
 
   const obj = proxy(new CountClass())
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj)
     const commitsRef = useRef(0)
     useEffect(() => {
@@ -62,7 +78,7 @@ it('no extra re-renders with class', async () => {
     )
   }
 
-  const Counter2: React.FC = () => {
+  const Counter2 = () => {
     const snap = useSnapshot(obj)
     const commitsRef = useRef(0)
     useEffect(() => {
@@ -79,10 +95,10 @@ it('no extra re-renders with class', async () => {
   }
 
   const { getByText } = render(
-    <StrictMode>
+    <>
       <Counter />
       <Counter2 />
-    </StrictMode>
+    </>
   )
 
   await waitFor(() => {
@@ -120,7 +136,7 @@ it('inherited class without methods', async () => {
 
   const obj = proxy(new CountClass())
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj)
     return (
       <>
@@ -155,7 +171,7 @@ it('class with a method', async () => {
 
   const obj = proxy(new CountClass())
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj)
     const commitsRef = useRef(0)
     useEffect(() => {
@@ -171,7 +187,7 @@ it('class with a method', async () => {
     )
   }
 
-  const Counter2: React.FC = () => {
+  const Counter2 = () => {
     const snap = useSnapshot(obj)
     const commitsRef = useRef(0)
     useEffect(() => {
@@ -185,10 +201,10 @@ it('class with a method', async () => {
   }
 
   const { getByText } = render(
-    <StrictMode>
+    <>
       <Counter />
       <Counter2 />
-    </StrictMode>
+    </>
   )
 
   await waitFor(() => {
@@ -223,7 +239,7 @@ it('inherited class with a method', async () => {
 
   const obj = proxy(new CountClass())
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj)
     const commitsRef = useRef(0)
     useEffect(() => {
@@ -239,7 +255,7 @@ it('inherited class with a method', async () => {
     )
   }
 
-  const Counter2: React.FC = () => {
+  const Counter2 = () => {
     const snap = useSnapshot(obj)
     const commitsRef = useRef(0)
     useEffect(() => {
@@ -256,10 +272,10 @@ it('inherited class with a method', async () => {
   }
 
   const { getByText } = render(
-    <StrictMode>
+    <>
       <Counter />
       <Counter2 />
-    </StrictMode>
+    </>
   )
 
   await waitFor(() => {
@@ -298,7 +314,7 @@ it('no extra re-renders with getters', async () => {
 
   const obj = proxy(new CountClass())
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj)
     const commitsRef = useRef(0)
     useEffect(() => {
@@ -314,7 +330,7 @@ it('no extra re-renders with getters', async () => {
     )
   }
 
-  const Counter2: React.FC = () => {
+  const Counter2 = () => {
     const snap = useSnapshot(obj)
     const commitsRef = useRef(0)
     useEffect(() => {
@@ -331,10 +347,10 @@ it('no extra re-renders with getters', async () => {
   }
 
   const { getByText } = render(
-    <StrictMode>
+    <>
       <Counter />
       <Counter2 />
-    </StrictMode>
+    </>
   )
 
   await waitFor(() => {

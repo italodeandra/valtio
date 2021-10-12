@@ -1,4 +1,4 @@
-import { getUntrackedObject, markToTrack } from 'proxy-compare'
+import { getUntracked, markToTrack } from 'proxy-compare'
 
 const VERSION = Symbol()
 const LISTENERS = Symbol()
@@ -6,10 +6,11 @@ const SNAPSHOT = Symbol()
 const PROMISE_RESULT = Symbol()
 const PROMISE_ERROR = Symbol()
 
+const enum AsRef {}
 const refSet = new WeakSet()
-export const ref = <T extends object>(o: T): T => {
+export const ref = <T extends object>(o: T): T & AsRef => {
   refSet.add(o)
-  return o
+  return o as T & AsRef
 }
 
 const isSupportedObject = (x: unknown): x is object =>
@@ -28,43 +29,67 @@ const isSupportedObject = (x: unknown): x is object =>
 type ProxyObject = object
 const proxyCache = new WeakMap<object, ProxyObject>()
 
+type Path = (string | symbol)[]
+type Op =
+  | [op: 'set', path: Path, value: unknown, prevValue: unknown]
+  | [op: 'delete', path: Path, prevValue: unknown]
+  | [op: 'resolve', path: Path, value: unknown]
+  | [op: 'reject', path: Path, error: unknown]
+type Listener = (op: Op, nextVersion: number) => void
+
 let globalVersion = 1
 const snapshotCache = new WeakMap<
   object,
-  {
-    version: number
-    snapshot: unknown
-  }
+  [version: number, snapshot: unknown]
 >()
 
 export const proxy = <T extends object>(initialObject: T = {} as T): T => {
   if (!isSupportedObject(initialObject)) {
     throw new Error('unsupported object type')
   }
-  if (proxyCache.has(initialObject)) {
-    return proxyCache.get(initialObject) as T
+  const found = proxyCache.get(initialObject) as T | undefined
+  if (found) {
+    return found
   }
   let version = globalVersion
-  const listeners = new Set<(nextVersion: number) => void>()
-  const notifyUpdate = (nextVersion?: number) => {
+  const listeners = new Set<Listener>()
+  const notifyUpdate = (op: Op, nextVersion?: number) => {
     if (!nextVersion) {
       nextVersion = ++globalVersion
     }
     if (version !== nextVersion) {
       version = nextVersion
-      listeners.forEach((listener) => listener(nextVersion as number))
+      listeners.forEach((listener) => listener(op, nextVersion as number))
     }
+  }
+  const propListeners = new Map<string | symbol, Listener>()
+  const getPropListener = (prop: string | symbol) => {
+    let propListener = propListeners.get(prop)
+    if (!propListener) {
+      propListener = (op, nextVersion) => {
+        const newOp: Op = [...op]
+        newOp[1] = [prop, ...(newOp[1] as Path)]
+        notifyUpdate(newOp, nextVersion)
+      }
+      propListeners.set(prop, propListener)
+    }
+    return propListener
+  }
+  const popPropListener = (prop: string | symbol) => {
+    const propListener = propListeners.get(prop)
+    propListeners.delete(prop)
+    return propListener
   }
   const createSnapshot = (target: any, receiver: any) => {
     const cache = snapshotCache.get(receiver)
-    if (cache && cache.version === version) {
-      return cache.snapshot
+    if (cache?.[0] === version) {
+      return cache[1]
     }
     const snapshot: any = Array.isArray(target)
       ? []
       : Object.create(Object.getPrototypeOf(target))
     markToTrack(snapshot, true) // mark to track
-    snapshotCache.set(receiver, { version, snapshot })
+    snapshotCache.set(receiver, [version, snapshot])
     Reflect.ownKeys(target).forEach((key) => {
       const value = target[key]
       if (refSet.has(value)) {
@@ -79,6 +104,9 @@ export const proxy = <T extends object>(initialObject: T = {} as T): T => {
           const errorOrPromise = (value as any)[PROMISE_ERROR] || value
           Object.defineProperty(snapshot, key, {
             get() {
+              if (PROMISE_RESULT in (value as any)) {
+                return (value as any)[PROMISE_RESULT]
+              }
               throw errorOrPromise
             },
           })
@@ -110,13 +138,13 @@ export const proxy = <T extends object>(initialObject: T = {} as T): T => {
     },
     deleteProperty(target, prop) {
       const prevValue = target[prop]
-      const childListeners = prevValue && (prevValue as any)[LISTENERS]
+      const childListeners = (prevValue as any)?.[LISTENERS]
       if (childListeners) {
-        childListeners.delete(notifyUpdate)
+        childListeners.delete(popPropListener(prop))
       }
       const deleted = Reflect.deleteProperty(target, prop)
       if (deleted) {
-        notifyUpdate()
+        notifyUpdate(['delete', [prop], prevValue])
       }
       return deleted
     },
@@ -125,9 +153,9 @@ export const proxy = <T extends object>(initialObject: T = {} as T): T => {
       if (Object.is(prevValue, value)) {
         return true
       }
-      const childListeners = prevValue && (prevValue as any)[LISTENERS]
+      const childListeners = (prevValue as any)?.[LISTENERS]
       if (childListeners) {
-        childListeners.delete(notifyUpdate)
+        childListeners.delete(popPropListener(prop))
       }
       if (
         refSet.has(value) ||
@@ -139,23 +167,23 @@ export const proxy = <T extends object>(initialObject: T = {} as T): T => {
         target[prop] = value
           .then((v) => {
             target[prop][PROMISE_RESULT] = v
-            notifyUpdate()
+            notifyUpdate(['resolve', [prop], v])
             return v
           })
           .catch((e) => {
             target[prop][PROMISE_ERROR] = e
-            notifyUpdate()
+            notifyUpdate(['reject', [prop], e])
           })
       } else {
-        value = getUntrackedObject(value) || value
+        value = getUntracked(value) || value
         if (value[LISTENERS]) {
           target[prop] = value
         } else {
           target[prop] = proxy(value)
         }
-        target[prop][LISTENERS].add(notifyUpdate)
+        target[prop][LISTENERS].add(getPropListener(prop))
       }
-      notifyUpdate()
+      notifyUpdate(['set', [prop], value, prevValue])
       return true
     },
   })
@@ -178,7 +206,7 @@ export const getVersion = (proxyObject: any): number => {
   if (
     typeof process === 'object' &&
     process.env.NODE_ENV !== 'production' &&
-    (!proxyObject || !proxyObject[VERSION])
+    !proxyObject?.[VERSION]
   ) {
     throw new Error('Please use proxy object')
   }
@@ -187,26 +215,28 @@ export const getVersion = (proxyObject: any): number => {
 
 export const subscribe = (
   proxyObject: any,
-  callback: () => void,
+  callback: (ops: Op[]) => void,
   notifyInSync?: boolean
 ) => {
   if (
     typeof process === 'object' &&
     process.env.NODE_ENV !== 'production' &&
-    (!proxyObject || !proxyObject[LISTENERS])
+    !proxyObject?.[LISTENERS]
   ) {
     throw new Error('Please use proxy object')
   }
   let pendingVersion = 0
-  const listener = (nextVersion: number) => {
+  const ops: Op[] = []
+  const listener: Listener = (op, nextVersion) => {
+    ops.push(op)
     if (notifyInSync) {
-      callback()
+      callback(ops.splice(0))
       return
     }
     pendingVersion = nextVersion
     Promise.resolve().then(() => {
       if (nextVersion === pendingVersion) {
-        callback()
+        callback(ops.splice(0))
       }
     })
   }
@@ -216,21 +246,25 @@ export const subscribe = (
   }
 }
 
-export type NonPromise<T> = T extends Function
+export type DeepResolveType<T> = T extends Function
+  ? T
+  : T extends AsRef
   ? T
   : T extends Promise<infer V>
   ? V
   : T extends object
   ? {
-      [K in keyof T]: NonPromise<T[K]>
+      [K in keyof T]: DeepResolveType<T[K]>
     }
   : T
 
-export const snapshot = <T extends object>(proxyObject: T): NonPromise<T> => {
+export const snapshot = <T extends object>(
+  proxyObject: T
+): DeepResolveType<T> => {
   if (
     typeof process === 'object' &&
     process.env.NODE_ENV !== 'production' &&
-    (!proxyObject || !(proxyObject as any)[SNAPSHOT])
+    !(proxyObject as any)?.[SNAPSHOT]
   ) {
     throw new Error('Please use proxy object')
   }

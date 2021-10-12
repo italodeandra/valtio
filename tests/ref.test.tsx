@@ -1,11 +1,27 @@
-import React, { StrictMode, useRef, useEffect } from 'react'
+import { StrictMode, useEffect, useRef } from 'react'
 import { fireEvent, render } from '@testing-library/react'
-import { proxy, ref, useSnapshot } from '../src/index'
+import { proxy, ref, useSnapshot } from 'valtio'
+
+const consoleError = console.error
+beforeEach(() => {
+  console.error = jest.fn((message) => {
+    if (
+      process.env.NODE_ENV === 'production' &&
+      message.startsWith('act(...) is not supported in production')
+    ) {
+      return
+    }
+    consoleError(message)
+  })
+})
+afterEach(() => {
+  console.error = consoleError
+})
 
 it('should trigger re-render setting objects with ref wrapper', async () => {
   const obj = proxy({ nested: ref({ count: 0 }) })
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj)
     const commitsRef = useRef(1)
     useEffect(() => {
@@ -22,22 +38,21 @@ it('should trigger re-render setting objects with ref wrapper', async () => {
   }
 
   const { getByText, findByText } = render(
-    <StrictMode>
+    <>
       <Counter />
-    </StrictMode>
+    </>
   )
 
   await findByText('count: 0 (1)')
 
   fireEvent.click(getByText('button'))
-  await Promise.resolve()
   await findByText('count: 0 (2)')
 })
 
 it('should not track object wrapped in ref assigned to proxy state', async () => {
   const obj = proxy<{ ui: JSX.Element | null }>({ ui: null })
 
-  const Component: React.FC = () => {
+  const Component = () => {
     const snap = useSnapshot(obj)
     return (
       <>
@@ -58,14 +73,13 @@ it('should not track object wrapped in ref assigned to proxy state', async () =>
   await findByText('original')
 
   fireEvent.click(getByText('button'))
-  await Promise.resolve()
   await findByText('replace')
 })
 
 it('should not trigger re-render when mutating object wrapped in ref', async () => {
   const obj = proxy({ nested: ref({ count: 0 }) })
 
-  const Counter: React.FC = () => {
+  const Counter = () => {
     const snap = useSnapshot(obj)
     return (
       <>
@@ -84,6 +98,5 @@ it('should not trigger re-render when mutating object wrapped in ref', async () 
   await findByText('count: 0')
 
   fireEvent.click(getByText('button'))
-  await Promise.resolve()
   await findByText('count: 0')
 })
